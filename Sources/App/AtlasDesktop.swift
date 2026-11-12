@@ -21,6 +21,7 @@ final class AtlasDesktopController: NSObject, NSMenuDelegate, NSMenuItemValidati
     private var lastApplied: (Bool,Bool,Bool)?
     var onOptions: (() -> Void)?
     var onPause: (() -> Void)?
+    var onClock: (() -> Void)?
     var onNew: (() -> Void)?
     var onShow: (() -> Void)?
     var isActive: Bool { desktop != nil }
@@ -144,7 +145,7 @@ final class AtlasDesktopController: NSObject, NSMenuDelegate, NSMenuItemValidati
         item.button?.image?.isTemplate = true
         let menu = NSMenu(); menu.delegate = self
         let title = menu.addItem(withTitle: "Atlas · Živé pozadí",action: nil,keyEquivalent: ""); title.isEnabled = false
-        for (title,action) in [("Upravit kresbu…",#selector(options)),("Pozastavit / pokračovat",#selector(pause)),("Pozastavit při celé obrazovce",#selector(toggleFullscreenPause)),("Nová kresba",#selector(newJourney)),("Návrat do okna",#selector(show)),("Nastavení systémového spořiče…",#selector(openSaver)),("Spouštět po přihlášení",#selector(toggleLogin))] {
+        for (title,action) in [("Upravit kresbu…",#selector(options)),("Pozastavit / pokračovat",#selector(pause)),("Pozastavit při celé obrazovce",#selector(toggleFullscreenPause)),("Nová kresba",#selector(newJourney)),("Zobrazit čas a datum",#selector(showClock)),("Návrat do okna",#selector(show)),("Nastavení systémového spořiče…",#selector(openSaver)),("Spouštět po přihlášení",#selector(toggleLogin))] {
             let entry = menu.addItem(withTitle: title,action: action,keyEquivalent: ""); entry.target = self
         }
         menu.addItem(.separator()); let quit = menu.addItem(withTitle: "Ukončit Atlas",action: #selector(NSApplication.terminate(_:)),keyEquivalent: "q"); quit.target = NSApp
@@ -152,6 +153,7 @@ final class AtlasDesktopController: NSObject, NSMenuDelegate, NSMenuItemValidati
     }
     @objc private func options() { onOptions?() }
     @objc private func pause() { onPause?(); refresh() }
+    @objc private func showClock() { onClock?() }
     @objc private func newJourney() { onNew?() }
     @objc private func show() { onShow?() }
     @objc private func openSaver() { AtlasInstallation.openSettings() }
@@ -170,6 +172,7 @@ final class AtlasDesktopController: NSObject, NSMenuDelegate, NSMenuItemValidati
         } catch { NSApp.activate(ignoringOtherApps: true); NSAlert(error: error).runModal() }
     }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(showClock) { return canvas.renderer.settings.clock.enabled }
         if menuItem.action == #selector(pause) { menuItem.state = canvas.animationPaused ? .on : .off }
         if menuItem.action == #selector(toggleFullscreenPause) { menuItem.state = AtlasSettings.defaults.bool(forKey: "pauseForFullScreen") ? .on : .off }
         if menuItem.action == #selector(toggleLogin) { menuItem.state = SMAppService.mainApp.status == .enabled ? .on : SMAppService.mainApp.status == .requiresApproval ? .mixed : .off }

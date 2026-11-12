@@ -2,11 +2,13 @@
 
 Experimentální spořič pro macOS 13 a novější. Jemné barevné čáry společně proměňují kruhy, hvězdice, mnohoúhelníky, osmičky, listové tvary, astroidy a zaoblené čtverce. Generativní ornament má vlastní proměnlivou strukturu, rozvíjí se za obrys a vrací dovnitř. Černé pozadí zůstává součástí kompozice.
 
-ARose inspiroval jemnost, barevnost a princip společně řízených parametrů. Atlas mapuje proměnlivé harmonické pole do uzavřených geometrických profilů. Všechna vlákna sdílejí společné pole a dvojici aktuálních obrysů; ornament a morphování hlavního tvaru mají nezávislé časové průběhy.
+ARose inspiroval jemnost, barevnost a princip společně řízených parametrů. Atlas mapuje proměnlivé harmonické pole do otevřených i uzavřených geometrických profilů. Všechna vlákna sdílejí společné pole a dvojici aktuálních obrysů; ornament a morphování hlavního tvaru mají nezávislé časové průběhy.
 
 Obrys kruhu má konstantní poloměr; u hvězdic a mnohoúhelníků se poloměr získá průsečíkem paprsku s hranou. Osmička používá Geronovu lemniskátu s proměnlivými proporcemi obou laloků. Listové profily mají harmonicky proměnný poloměr, astroida prohnuté strany a zaoblený čtverec vychází ze superelipsy. Plynule se interpolují odpovídající body dvou aktuálních profilů.
 
-Ornament vzniká ze základního kruhového pohybu a tří dalších harmonických složek. Jejich celočíselné frekvence zahrnují oba směry oběhu. Vlastní fáze a normalizované váhy jednotlivých složek se vyvíjejí nezávisle na morphování hlavního obrysu. Dvě generované sady frekvencí se průběžně prolínají; neinterpolují se samotná celočíselná vinutí, takže křivky zůstávají uzavřené. Počet laloků ornamentu není předepsaný hlavním tvarem.
+Paletu doplňuje větvená šestiramenná vločka, srdcovka a prostorový toroidální uzel, jehož náklon se v projekci průběžně mění. Dva vzácnější profily, široká zvlněná stuha a spirála, mají volné konce. Uzavřený motiv se při přechodu kreslí po postupně kratším úseku svého obvodu, zatímco se jeho body přesouvají na otevřenou křivku. Stopy a blízká barevná vlákna kolem ní vytvářejí závoj. Otevřené profily nenásledují přímo po sobě.
+
+Ornament vzniká ze základního kruhového pohybu a tří dalších harmonických složek. Jejich celočíselné frekvence zahrnují oba směry oběhu. Vlastní fáze a normalizované váhy jednotlivých složek se vyvíjejí nezávisle na morphování hlavního obrysu. Dvě generované sady frekvencí se průběžně prolínají; neinterpolují se samotná celočíselná vinutí, takže uzavřené křivky zůstávají beze švu. Počet laloků ornamentu není předepsaný hlavním tvarem.
 
 Třináct ornamentálních vláken sdílí stejné harmonické pole, ale liší se mírou deformace, fázovým posunem a poloměrem. Jejich rozestupy i soustředění se také průběžně mění. Hlavní čtrnácté vlákno drží čitelný obrys. Radiální transformace umožňuje přecházet dovnitř a vně profilu; vnější ornament zachovává proměnlivou radiální strukturu i během rozvíjení.
 
@@ -60,6 +62,8 @@ Nastavení se ukládá pro příslušný režim. Aplikace průběžně uchováv�
 
 **Rychlost** má rozsah 1–10× a výchozí tempo je 1×. Nové 1× odpovídá původním 6×, nové 5× původním 12× a nové 10× původním 24×. Mezi těmito body tempo roste plynule. Ovládá vlákna, jejich vnitřní vývoj, barvy a rotaci. Uložené tempo zůstává zachované v mezích nového rozsahu; pomalejší hodnoty se zvednou na nové minimum 1×.
 
+Čas od času se vlákna ve výchozím nastavení na 15 sekund poskládají do místního času ve formátu HH:MM. Při některých zobrazeních se pod ním objeví i datum DD.MM.RRRR. Oba řádky zůstávají vodorovné, zatímco se kompozice posouvá a mění velikost. Při změně minuty se mění jen potřebné tahy. První automatické zobrazení přichází po 5 až 7 minutách a 20 sekundách skutečného přehrávání. Po zapnutí volby **Zobrazovat hodiny** lze nastavit nejkratší a nejdelší čekání před prvním i mezi dalšími zobrazeními (30 sekund až 30 minut) a celkovou délku zobrazení včetně přechodů (8 až 90 sekund). Jas číslic pulzuje po jednotlivých vláknech. Pro okamžitou ukázku je v nabídce Kresba i v nabídce živého pozadí položka **Zobrazit čas a datum**.
+
 **Délka tvaru** má rozsah 3–40 sekund a výchozí hodnotu přibližně 8 sekund mezi dvěma cílovými tvary. První pětinu intervalu se obrys krátce drží svého tvaru, poté plynule přejde do dalšího; jemné časové modulace délku jednotlivých intervalů mírně obměňují. Vlákna pokračují i během setrvání a rotace má vlastní průběh. Posuvník je nezávislý na rychlosti kresby a změna za běhu neposune aktuální obrazec. Samostatný čas proměn se ukládá společně s vývojem ornamentu.
 
 ## Dlouhý průběh
@@ -96,7 +100,7 @@ Obrazová historie používá dvě textury s 16bitovými plovoucími složkami. 
 ./script/test_integration.sh
 ```
 
-Kontrola vzorkuje uzavřenost všech vláken a prostorové meze na čtvercové, širokoúhlé i portrétní ploše během 24 hodin matematického času. Samostatně ověřuje návaznost cílových profilů a harmonických sad, průběžný vnitřní pohyb, přesun vláken dovnitř i ven a společný střed osmičky. Dále vykreslí 15 minut Metal animace a ověří tempa 6× i 12×. Výstupy jsou v `.build/checks/`.
+Kontrola vzorkuje konce otevřených i uzavřených vláken a prostorové meze na čtvercové, širokoúhlé i portrétní ploše během 24 hodin matematického času. Samostatně ověřuje návaznost cílových profilů a harmonických sad, průběžný vnitřní pohyb, přesun vláken dovnitř i ven a společný střed osmičky. Dále vykreslí 15 minut Metal animace a ověří tempa 1× i 10×. Výstupy jsou v `.build/checks/`.
 
 Kontrola časování ověřuje nezávislost rychlosti ornamentu a délky tvaru, plynulé ukončení setrvání a zachování starších nastavení. Změna délky tvaru při pozastavení musí zachovat pixelově shodný obraz i oba časy.
 

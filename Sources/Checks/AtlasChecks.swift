@@ -301,6 +301,84 @@ enum AtlasChecks {
         print("Rozvíjení: přesuny \(String(format: "%.1f–%.1f",durations.min()!,durations.max()!)) s při 6×; variabilita délky \(String(format: "%.2f",variation)); vypnuto \(Int(offSeconds)) s a setrvání \(Int(holdSeconds)) s ve vzorku \(Int(time/6)) s. Měřítko stejného hlavního tvaru zůstává stálé.")
     }
 
+    static func clock(output: URL) throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let instant = calendar.date(from: DateComponents(year: 2026,month: 11,day: 12,hour: 21,minute: 37))!
+        try require(AtlasClock.encode(instant) == SIMD2(0x2137,0x12112026),"Hodiny nerozložily místní čas a datum.")
+        let utc = TimeZone(secondsFromGMT: 0)!
+        let plusTwo = TimeZone(secondsFromGMT: 7200)!
+        try require(AtlasClock.encode(Date(timeIntervalSince1970: 82800),timeZone: utc) == SIMD2(0x2300,0x01011970)
+                    && AtlasClock.encode(Date(timeIntervalSince1970: 82800),timeZone: plusTwo) == SIMD2(0x0100,0x02011970),
+                    "Změna místního dne nepřevedla datum.")
+        let seed: UInt64 = 0xA71A520261022
+        let defaults = AtlasClockSettings()
+        let saved = try JSONDecoder().decode(AtlasSettings.self,from: Data(#"{"speed":6,"luminosity":1.2}"#.utf8))
+        try require(saved.clock == defaults && saved.luminosity == 1.2,"Původní nastavení se nenačetlo s výchozími hodinami.")
+        var edited = saved
+        edited.clock = AtlasClockSettings(earliest: 50,latest: 78,duration: 24)
+        let roundTrip = try JSONDecoder().decode(AtlasSettings.self,from: JSONEncoder().encode(edited))
+        try require(roundTrip.clock == edited.clock,"Časování hodin se neobnovilo z uložených voleb.")
+        for options in [defaults,edited.clock,AtlasClockSettings(earliest: 30,latest: 30,duration: 8)] {
+            var clock = AtlasClock(), starts = [Double](), ends = [Double](), dates = Set<Bool>(), previous: Float = 0
+            let step = 0.05
+            while ends.count<12 && clock.elapsed<(options.latest+options.duration+1)*12 {
+                clock.advance(step,seed: seed,settings: options)
+                let moment = clock.presentation()
+                try require(abs(moment.blend-previous)<0.06,"Hodiny při příchodu nebo odchodu přeskočily.")
+                if moment.blend>0 && previous==0 { starts.append(clock.elapsed); dates.insert(moment.date) }
+                if moment.blend==0 && previous>0 { ends.append(clock.elapsed) }
+                previous = moment.blend
+            }
+            try require(starts.count == 12 && ends.count == 12 && dates.count == 2,"Chybí plánované zobrazení času nebo data.")
+            for i in ends.indices {
+                let wait = starts[i]-(i == 0 ? 0 : ends[i-1])
+                try require(wait >= options.earliest-step && wait <= options.latest+2*step+0.0001
+                            && abs(ends[i]-starts[i]-options.duration)<=step+0.0001,
+                            "Odstup nebo délka zobrazení neodpovídají uloženým mezím.")
+            }
+        }
+        var manual = AtlasClock()
+        manual.showNow(settings: edited.clock); manual.advance(0.2,seed: seed,settings: edited.clock)
+        let immediate = manual.presentation()
+        try require(immediate.blend>0 && immediate.date,"Ruční zobrazení neotevřelo čas s datem.")
+        manual.showNow(settings: defaults)
+        try require(manual.presentation().blend==immediate.blend,"Opakovaný příkaz přerušil probíhající proměnu.")
+        manual.advance(16,seed: seed,settings: defaults)
+        try require(manual.presentation().blend>0,"Změna nastavení zkrátila právě běžící zobrazení.")
+        manual.advance(23.7+defaults.earliest-16,seed: seed,settings: defaults)
+        try require(manual.presentation().blend==0,"Automatické hodiny přišly příliš brzy po ručním zobrazení.")
+        var switched = AtlasClock()
+        var disabled = edited.clock; disabled.enabled = false
+        switched.showNow(settings: disabled)
+        switched.advance(600,seed: seed,settings: disabled)
+        try require(switched.presentation().blend==0,"Vypnuté hodiny se přesto zobrazily.")
+        switched.advance(0.05,seed: seed,settings: edited.clock)
+        try require(switched.presentation().blend==0,"Při zapnutí se neobnovila čekací doba.")
+        switched.showNow(settings: edited.clock)
+        switched.advance(4,seed: seed,settings: edited.clock)
+        try require(switched.presentation().blend==1,"Ruční zobrazení po zapnutí nefunguje.")
+        switched.advance(0.5,seed: seed,settings: disabled)
+        try require(switched.presentation().blend>0 && switched.presentation().blend<1,"Vypnutí hodin nemá plynulý odchod.")
+        switched.advance(1.2,seed: seed,settings: disabled)
+        try require(switched.presentation().blend==0,"Vypnuté hodiny se nerozpletly zpět do kresby.")
+        for (name,width,height,showsDate) in [("cas-a-datum",1440,900,true),("cas",1440,900,false),("datum-na-vysku",720,1100,true)] {
+            let renderer = try AtlasRenderer(settings: AtlasSettings(),seed: seed)
+            let target = try renderer.makeSnapshotTarget(width: width,height: height)
+            for frame in 0..<162 {
+                let age = Double(frame)/30
+                let blend = Float(AtlasField.smooth(min(1,age/3.4)))
+                let current = frame>=141 ? instant.addingTimeInterval(60) : instant
+                try renderer.render(target: target,delta: 1.0/30,wait: true,clockPreview: (current,showsDate,blend))
+                if showsDate && width>height && frame==66 {
+                    try inspect(texture: target,renderer: renderer,output: output,name: "formovani-hodin",checkOccupancy: false)
+                }
+            }
+            try inspect(texture: target,renderer: renderer,output: output,name: name,checkOccupancy: false)
+        }
+        print("Hodiny: nepravidelné vstupy, místní čas, přechod přes půlnoc a vykreslení obou řádků prošly.")
+    }
+
     static func run(gallery: Bool = false) throws {
         let output = URL(fileURLWithPath: CommandLine.arguments.last!).standardizedFileURL
         try FileManager.default.createDirectory(at: output,withIntermediateDirectories: true)
@@ -313,7 +391,9 @@ enum AtlasChecks {
             for minute in stride(from: 0,through: 1440,by: 7) {
                 let u = field.uniforms(time: Double(minute*60),delta: 0,width: Int(aspect*900),height: 900,settings: referenceSettings)
                 for layer in 0..<AtlasField.strandCount {
-                    try require(simd_length(AtlasField.point(0,layer: layer,uniforms: u)-AtlasField.point(2 * .pi,layer: layer,uniforms: u))<0.00001,"Vlákno má otevřený spoj.")
+                    if !AtlasField.isOpen(u.sourceShape) && !AtlasField.isOpen(u.targetShape) {
+                        try require(simd_length(AtlasField.point(0,layer: layer,uniforms: u)-AtlasField.point(2 * .pi,layer: layer,uniforms: u))<0.00001,"Uzavřené vlákno má mezeru.")
+                    }
                     for sample in 0..<48 {
                         let p = AtlasField.point(Double(sample)*2 * .pi/48,layer: layer,uniforms: u)
                         try require(p.x.isFinite && p.y.isFinite && abs(p.x)<aspect && abs(p.y)<1,"Kresba opustila dostupnou plochu.")
@@ -331,6 +411,17 @@ enum AtlasChecks {
                 }
                 continue
             }
+            if shape.x >= 9 {
+                if AtlasField.isOpen(shape) {
+                    try require(!AtlasField.isOpen(field.descriptor(node: node-1)),"Otevřené motivy následují hned po sobě.")
+                    var u = field.uniforms(time: Double(node*24),delta: 0,width: 1600,height: 900,settings: referenceSettings)
+                    u.sourceShape = shape; u.targetShape = shape; u.sourceFrame = frame; u.targetFrame = frame
+                    for layer in 0..<AtlasField.strandCount {
+                        try require(simd_length(AtlasField.point(0,layer: layer,uniforms: u)-AtlasField.point(2 * .pi,layer: layer,uniforms: u))>0.15,"Otevřený motiv spojil konce.")
+                    }
+                }
+                continue
+            }
             for outside: Float in [0,1] {
                 var u = field.uniforms(time: Double(node*24),delta: 0,width: 1600,height: 900,settings: referenceSettings)
                 u.sourceShape = shape; u.targetShape = shape; u.sourceFrame = frame; u.targetFrame = frame
@@ -343,7 +434,7 @@ enum AtlasChecks {
                 } }
             }
         }
-        try require(kinds.count == 9,"Generátor nevyužívá celou paletu profilů.")
+        try require(kinds.count == AtlasField.profileCount,"Generátor nevyužívá celou paletu profilů.")
         var minimumMotion = Double.infinity
         for second in stride(from: 0,through: 3600,by: 7) {
             var a = field.uniforms(time: Double(second),delta: 0,width: 900,height: 900,settings: referenceSettings)
@@ -397,8 +488,24 @@ enum AtlasChecks {
         let csv = spectra.enumerated().map { String($0.offset)+","+$0.element.map { String(format: "%.8f",$0) }.joined(separator: ",") }.joined(separator: "\n")
         try csv.write(to: output.appendingPathComponent("intrinsic-hour.csv"),atomically: true,encoding: .utf8)
         print("Stejný kruh během hodiny: \(dominant.count) dominantních úhlových struktur; průměrná změna spektra bez vlivu barvy, natočení a měřítka \(String(format: "%.4f",meanDifference)).")
-        print("Uzavřenost vláken, meze plochy během 24 hodin skóre a návaznost nezávislých proměn prošly.")
+        print("Otevřené a uzavřené profily, meze plochy během 24 hodin skóre a návaznost nezávislých proměn prošly.")
         if gallery {
+            try clock(output: output)
+            let names = ["stuha","vlocka","uzel","srdce","spirala"]
+            for (index,name) in names.enumerated() {
+                guard let node = (1..<200).first(where: { Int(field.descriptor(node: $0).x) == 9+index }) else {
+                    throw AtlasError.unavailable("Chybí cílový profil pro náhled.")
+                }
+                var low = 0.0, high = Double(node)*24+12
+                for _ in 0..<48 {
+                    let mid = (low+high)*0.5
+                    if AtlasField.transition(time: mid).node < node { low = mid } else { high = mid }
+                }
+                let r = try AtlasRenderer(settings: referenceSettings,seed: seed,elapsed: high*6,shapeElapsed: high)
+                let target = try r.makeSnapshotTarget(width: 1440,height: 900)
+                for _ in 0..<100 { try r.render(target: target,delta: 1.0/30,wait: true) }
+                try inspect(texture: target,renderer: r,output: output,name: "novy-\(name)",checkOccupancy: true)
+            }
             for second in [3,1800,10800,21600] {
                 let settings = AtlasSettings()
                 let start = max(0,Double(second)-3*settings.speed)
@@ -441,7 +548,7 @@ enum AtlasChecks {
             try require(abs(fast.elapsed-3*speed)<0.0001,"Rychlost \(speed)× neposouvá animaci správně.")
             try inspect(texture: target,renderer: fast,output: output,name: "atlas-speed-\(Int(speed))",checkOccupancy: true)
         }
-        print("Metal: 15 minut kreslení a tempa 6× i 12× prošla; výstup: \(output.path)")
+        print("Metal: 15 minut kreslení a tempa 1× i 10× prošla; výstup: \(output.path)")
     }
 
     private static func inspect(texture: MTLTexture,renderer: AtlasRenderer,output: URL,name: String,checkOccupancy: Bool,checkBothAxes: Bool = false) throws {

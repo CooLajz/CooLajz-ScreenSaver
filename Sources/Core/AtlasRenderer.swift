@@ -9,6 +9,113 @@ enum AtlasError: LocalizedError {
     }
 }
 
+/// Independent of the ornament speed and shape duration. Time only advances
+/// while frames are displayed, so the next appearance cannot expire in sleep.
+struct AtlasClock {
+    private(set) var elapsed = 0.0
+    private struct Appearance {
+        let start: Double
+        let duration: Double
+        let date: Bool
+        var end: Double { start+duration }
+    }
+    private var active: Appearance?
+    private var exit: (start: Double, blend: Float)?
+    private static let exitDuration = 1.6
+    private var cycle = 0
+    private var waitingSince = 0.0
+    private var plannedSettings: AtlasClockSettings?
+    private var deadline = 0.0
+    private var minute: Int64?
+    private var digits = SIMD2<UInt32>.zero
+    private var previous = SIMD2<UInt32>.zero
+    private var changedAt = 0.0
+
+    func presentation() -> (blend: Float, date: Bool) {
+        guard let active else { return (0,false) }
+        if let exit {
+            let progress = min(1,(elapsed-exit.start)/Self.exitDuration)
+            return (exit.blend*Float(1-AtlasField.smooth(progress)),active.date)
+        }
+        let age = elapsed-active.start, remaining = active.end-elapsed
+        let ramp = min(3.4,active.duration*0.25)
+        return (Float(AtlasField.smooth(max(0,min(1,age/ramp,remaining/ramp)))),active.date)
+    }
+
+    private mutating func endAppearanceIfNeeded() {
+        guard let active else { return }
+        let end = exit.map { $0.start+Self.exitDuration } ?? active.end
+        guard elapsed >= end else { return }
+        self.active = nil
+        exit = nil
+        waitingSince = end
+        plannedSettings = nil
+        cycle += 1
+    }
+
+    mutating func advance(_ delta: Double,seed: UInt64,settings: AtlasClockSettings) {
+        if !settings.enabled, exit == nil, let active, elapsed < active.end {
+            let blend = presentation().blend
+            if blend > 0 { exit = (elapsed,blend) }
+            else { self.active = nil; plannedSettings = nil }
+        }
+        elapsed += delta
+        endAppearanceIfNeeded()
+        if !settings.enabled {
+            if active == nil { waitingSince = elapsed; plannedSettings = nil }
+            return
+        }
+        guard active == nil else { return }
+        let field = AtlasField(seed: seed)
+        if plannedSettings != settings {
+            deadline = waitingSince+settings.earliest+(settings.latest-settings.earliest)*field.unit(cycle,0x13a1)
+            plannedSettings = settings
+        }
+        if elapsed >= deadline {
+            active = Appearance(start: elapsed,duration: settings.duration,date: field.unit(cycle,0x13a2)<0.44)
+        }
+    }
+
+    mutating func showNow(settings: AtlasClockSettings) {
+        guard settings.enabled, active == nil else { return }
+        active = Appearance(start: elapsed,duration: settings.duration,date: true)
+    }
+
+    static func encode(_ date: Date, timeZone: TimeZone = .current) -> SIMD2<UInt32> {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let c = calendar.dateComponents([.hour,.minute,.day,.month,.year],from: date)
+        func pack(_ value: Int,count: Int) -> UInt32 {
+            var n = max(0,value), result: UInt32 = 0
+            for i in 0..<count {
+                result |= UInt32(n%10) << (4*i)
+                n /= 10
+            }
+            return result
+        }
+        return SIMD2(pack((c.hour ?? 0)*100+(c.minute ?? 0),count: 4),
+                     pack((c.day ?? 1)*1_000_000+(c.month ?? 1)*10_000+(c.year ?? 2000)%10_000,count: 8))
+    }
+
+    mutating func apply(to u: inout AtlasUniforms,
+                        preview: (instant: Date, showsDate: Bool, blend: Float)?) {
+        let moment = presentation()
+        let blend = preview?.blend ?? moment.blend
+        guard blend > 0 else { minute = nil; return }
+        let now = preview?.instant ?? Date()
+        let currentMinute = Int64(floor(now.timeIntervalSince1970/60))
+        if minute != currentMinute {
+            let next = Self.encode(now)
+            previous = minute == nil ? next : digits
+            digits = next; minute = currentMinute; changedAt = elapsed
+        }
+        let phase = (elapsed*0.39).truncatingRemainder(dividingBy: 2 * .pi)
+        let glyphBlend = AtlasField.smooth(min(1,(elapsed-changedAt)/0.55))
+        u.clock = SIMD4(blend,(preview?.showsDate ?? moment.date) ? 1 : 0,Float(glyphBlend),Float(phase))
+        u.clockDigits = SIMD4(previous.x,previous.y,digits.x,digits.y)
+    }
+}
+
 /// Both the preview and the actual screen saver use this renderer. The shared
 /// parametric geometry, crisp strokes and fading history stay on the GPU.
 final class AtlasRenderer {
@@ -31,6 +138,7 @@ final class AtlasRenderer {
     private var bloomTextures: [MTLTexture] = []
     private var textureIndex = 0
     private var needsClear = true
+    private var clock = AtlasClock()
     private let available = DispatchSemaphore(value: 2)
 
     init(settings: AtlasSettings = .load(), seed: UInt64 = .random(in: 1...UInt64.max), elapsed: Double = 0, shapeElapsed: Double? = nil) throws {
@@ -113,13 +221,16 @@ final class AtlasRenderer {
         textures = [a,b]; textureIndex = 0; needsClear = true
     }
 
+    func showClockNow() { clock.showNow(settings: settings.clock.validated) }
+
     func restart() {
-        seed = .random(in: 1...UInt64.max); elapsed = 0; shapeElapsed = 0; needsClear = true
+        seed = .random(in: 1...UInt64.max); elapsed = 0; shapeElapsed = 0; clock = AtlasClock(); needsClear = true
     }
 
     @discardableResult
     func render(target: MTLTexture, delta: Double, backing: Double = 1,
-                drawable: CAMetalDrawable? = nil, wait: Bool = false, referenceCircle: Bool = false) throws -> Bool {
+                drawable: CAMetalDrawable? = nil, wait: Bool = false, referenceCircle: Bool = false,
+                clockPreview: (instant: Date, showsDate: Bool, blend: Float)? = nil) throws -> Bool {
         guard available.wait(timeout: wait ? .now()+5 : .now()) == .success else {
             if wait { throw AtlasError.unavailable("GPU neodpovědělo včas.") }
             return false
@@ -143,6 +254,11 @@ final class AtlasRenderer {
             uniforms.sourceShape = SIMD4(0,5,1,0); uniforms.targetShape = uniforms.sourceShape
             uniforms.sourceFrame = SIMD4(1,1,0,0); uniforms.targetFrame = uniforms.sourceFrame
             uniforms.morph.x = 0; uniforms.orbit = .zero; uniforms.layout = SIMD4(0.93,0,0,0)
+        }
+        var nextClock = clock
+        if !referenceCircle {
+            nextClock.advance(step,seed: seed,settings: appearance.clock)
+            nextClock.apply(to: &uniforms,preview: clockPreview)
         }
         uniforms.style.x *= Float(backing)
         let byteCount = MemoryLayout<AtlasUniforms>.stride
@@ -218,7 +334,7 @@ final class AtlasRenderer {
         }
         if drawsGeometry {
             textureIndex = 1-textureIndex; needsClear = false
-            elapsed = end; shapeElapsed = shapeEnd; frameCount += 1
+            elapsed = end; shapeElapsed = shapeEnd; clock = nextClock; frameCount += 1
         }
         return true
     }

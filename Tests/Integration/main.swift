@@ -74,7 +74,10 @@ let options = AtlasOptionsController(apply: { _ in },done: {})
 _ = options.view; options.view.layoutSubtreeIfNeeded()
 let stack = options.view.subviews.first as! NSStackView
 check(stack.fittingSize.height+44<=options.preferredContentSize.height,"Volby přesahují rozměry panelu.")
-check(stack.arrangedSubviews.filter { $0 is NSSlider }.count == 6,"Chybí ovladač kresby.")
+let clockSliders = stack.arrangedSubviews.compactMap { $0 as? NSStackView }.flatMap { $0.arrangedSubviews }.compactMap { $0 as? NSSlider }
+check(stack.arrangedSubviews.filter { $0 is NSSlider }.count == 6 && clockSliders.map(\.tag) == [6,7,8]
+      && stack.arrangedSubviews.compactMap { $0 as? NSStackView }.flatMap { $0.arrangedSubviews }.contains { $0 is NSSwitch },
+      "Chybí ovladač kresby nebo časování hodin.")
 
 // Exercise actual Metal/ScreenSaverView lifecycle without writing user cursors.
 let saver = AtlasSaverView(frame: NSRect(x: 0,y: 0,width: 640,height: 400),isPreview: true)!

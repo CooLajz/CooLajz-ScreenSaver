@@ -36,6 +36,7 @@ final class AtlasApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSToolb
             desktop = AtlasDesktopController(canvas: canvas,preview: window)
             desktop.onOptions = { [weak self] in self?.presentOptions() }
             desktop.onPause = { [weak self] in self?.togglePause() }
+            desktop.onClock = { [weak self] in self?.showClock() }
             desktop.onNew = { [weak self] in self?.newJourney() }
             desktop.onShow = { [weak self] in self?.showWindow() }
             installMenus()
@@ -66,6 +67,7 @@ final class AtlasApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSToolb
         pause.keyEquivalentModifierMask = []
         let new = art.addItem(withTitle: "Nová kresba", action: #selector(newJourney), keyEquivalent: "n")
         new.keyEquivalentModifierMask = []
+        art.addItem(withTitle: "Zobrazit čas a datum",action: #selector(showClock),keyEquivalent: "")
         let full = art.addItem(withTitle: "Celá obrazovka", action: #selector(fullscreen), keyEquivalent: "f")
         full.keyEquivalentModifierMask = []
         let escape = art.addItem(withTitle: "Opustit celou obrazovku", action: #selector(leaveFullscreen), keyEquivalent: "\u{1b}")
@@ -104,6 +106,11 @@ final class AtlasApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSToolb
         desktop?.refresh()
         pauseItem?.image = NSImage(systemSymbolName: canvas.animationPaused ? "play" : "pause", accessibilityDescription: canvas.animationPaused ? "Pokračovat v kresbě" : "Pozastavit kresbu")
     }
+    @objc private func showClock() {
+        guard renderer.settings.clock.enabled else { return }
+        renderer.showClockNow()
+        if canvas.animationPaused { togglePause() }
+    }
     @objc private func newJourney() { renderer.restart(); saveJourney() }
     @objc private func fullscreen() { if !desktop.isActive { window.toggleFullScreen(nil) } }
     @objc private func leaveFullscreen() { if window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) } }
@@ -127,6 +134,7 @@ final class AtlasApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSToolb
     @objc private func openSaverSettings() { AtlasInstallation.openSettings() }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleWallpaper) { item.state = desktop.isActive ? .on : .off; return !window.styleMask.contains(.fullScreen) }
+        if item.action == #selector(showClock) { return renderer.settings.clock.enabled }
         if item.action == #selector(fullscreen) { return !desktop.isActive }
         return true
     }

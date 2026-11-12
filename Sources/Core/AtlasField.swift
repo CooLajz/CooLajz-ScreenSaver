@@ -1,11 +1,28 @@
 import Foundation
 import simd
 
-/// Independently evolving harmonic fields mapped through closed profiles.
+/// Independently evolving harmonic fields mapped through open and closed profiles.
 /// Counter-derived targets and incommensurate phases have no playlist reset.
 struct AtlasField {
     let seed: UInt64
     static let strandCount = 14
+    static let profileCount = 14
+
+    // One arm of the dendrite, ordered along its perimeter. The two root
+    // points meet the neighboring arms after a 60° rotation.
+    static let snowflakeArm: [SIMD2<Double>] = {
+        let half = [SIMD2(0.10,-0.10/sqrt(3.0)), SIMD2(0.41,-0.055),
+                    SIMD2(0.66,-0.30), SIMD2(0.70,-0.27), SIMD2(0.54,-0.048),
+                    SIMD2(0.73,-0.033), SIMD2(0.88,-0.16), SIMD2(0.91,-0.13),
+                    SIMD2(0.83,-0.028)]
+        return half + [SIMD2(1,0)] + half.reversed().map { SIMD2($0.x,-$0.y) }
+    }()
+
+    static func isOpen(_ shape: SIMD4<Float>) -> Bool { shape.x == 9 || shape.x == 13 }
+
+    static func rotate(_ p: SIMD2<Double>,_ angle: Double) -> SIMD2<Double> {
+        SIMD2(p.x*cos(angle)-p.y*sin(angle),p.x*sin(angle)+p.y*cos(angle))
+    }
     static let journeySeedKey = "morphJourneySeed.v1"
     static let journeyTimeKey = "morphJourneyTime.v1"
     static let journeyShapeTimeKey = "morphJourneyShapeTime.v1"
@@ -51,6 +68,17 @@ struct AtlasField {
         let family = Int(unit(node,0x10)*13)
         let sides = Float(3+Int(unit(node,0x20)*7))
         let depth = Float(unit(node,0x30))
+        // Separate channels preserve the original palette's proportions.
+        // Space open profiles apart so the change in silhouette feels special.
+        let opening = unit(node,0x91)
+        if opening < 0.12 && unit(node-1,0x91) >= 0.12 {
+            if unit(node,0x92) < 0.68 { return SIMD4(9,0,0.19+0.12*depth,0) }
+            return SIMD4(13,1.13+0.45*depth,0.23+0.15*depth,Float(unit(node,0x93))*2 * .pi)
+        }
+        let alternate = unit(node,0x94)
+        if alternate < 0.085 { return SIMD4(10,0,0.70+0.30*depth,-.pi/2) }
+        if alternate < 0.17 { return SIMD4(11,unit(node,0x95)<0.65 ? 3 : 5,0.19+0.11*depth,Float(unit(node,0x96))*2 * .pi) }
+        if alternate < 0.24 { return SIMD4(12,0,0.78+0.22*depth,0) }
         // kind, profile order, profile parameter, orientation. These are
         // generated targets, not a repeating list of shape presets.
         switch family {
@@ -201,13 +229,34 @@ struct AtlasField {
         return radius<=1 ? radius : 1+excess/sqrt(1+excess*excess/0.16)
     }
 
-    static func outline(_ angle: Double,shape: SIMD4<Float>) -> SIMD2<Double> {
+    static func outline(_ angle: Double,shape: SIMD4<Float>,tiltPhase: Double = 0) -> SIMD2<Double> {
         let kind = Int(shape.x)
         let unit = SIMD2(cos(angle),sin(angle))
         if kind == 5 {
             let p = SIMD2(cos(angle),Double(shape.z)*sin(2*angle)*(1+Double(shape.y)*cos(angle)))
             let a = Double(shape.w)
             return SIMD2(p.x*cos(a)-p.y*sin(a),p.x*sin(a)+p.y*cos(a))
+        }
+        if kind == 10 {
+            let count = snowflakeArm.count-1
+            let position = (angle/(2 * .pi)).truncatingRemainder(dividingBy: 1)
+            let ring = (position < 0 ? position+1 : position)*6
+            let arm = min(5,Int(ring)), along = (ring-Double(arm))*Double(count)
+            let edge = min(count-1,Int(along)), f = along-Double(edge)
+            var p = snowflakeArm[edge]*(1-f)+snowflakeArm[edge+1]*f
+            // Depth affects the branches, while the root junction stays exact.
+            p.y *= 1-(1-Double(shape.z))*min(1,max(0,(p.x-0.10)*4))
+            return rotate(p,Double(arm)*(.pi/3)+Double(shape.w))
+        }
+        if kind == 11 {
+            let a = angle*Double(shape.y), b = 2*angle, depth = Double(shape.z)
+            let r = 0.68+depth*cos(a), tilt = 0.54+0.48*sin(tiltPhase+Double(shape.w))
+            return SIMD2(r*cos(b), r*sin(b)*cos(tilt)+depth*sin(a)*sin(tilt))
+        }
+        if kind == 12 {
+            let x = unit.y*unit.y*unit.y*Double(shape.z)
+            let y = (13*unit.x-5*cos(2*angle)-2*cos(3*angle)-cos(4*angle)+2)/16
+            return SIMD2(-x,y)
         }
         var radius = 1.0
         if kind == 6 {
@@ -233,7 +282,13 @@ struct AtlasField {
     static func frame(shape: SIMD4<Float>,aspect: Double) -> SIMD4<Float> {
         let kind = Int(shape.x)
         var low = SIMD2<Double>(repeating: -1), high = SIMD2<Double>(repeating: 1)
-        if kind == 5 {
+        if kind == 9 {
+            return SIMD4(Float(aspect/1.12),Float(min(1,aspect)),0,0)
+        } else if kind == 12 {
+            high = SIMD2(1,1.05); low = -high
+        } else if kind == 13 {
+            high = SIMD2(repeating: 1.12); low = -high
+        } else if kind == 5 {
             let c = abs(cos(Double(shape.w))), s = abs(sin(Double(shape.w)))
             let h = Double(shape.z)*(1+abs(Double(shape.y)))
             high = SIMD2(c+h*s,s+h*c); low = -high
@@ -262,12 +317,31 @@ struct AtlasField {
 
     /// Conservative bounds of the whole ornament after rotation. Size follows
     /// the current profiles, leaving room for the outside strands as they grow.
-    static func bounds(shape: SIMD4<Float>,frame: SIMD4<Float>,rotation: Double,radius: Double) -> (low: SIMD2<Double>,high: SIMD2<Double>) {
+    static func bounds(shape: SIMD4<Float>,frame: SIMD4<Float>,rotation: Double,radius: Double,phase: Double = 0) -> (low: SIMD2<Double>,high: SIMD2<Double>) {
         let c = cos(rotation), s = sin(rotation)
         func rotate(_ p: SIMD2<Double>) -> SIMD2<Double> { SIMD2(p.x*c-p.y*s,p.x*s+p.y*c) }
         let shift = rotate(SIMD2(Double(frame.z),Double(frame.w)))
-        if shape.x == 0 || shape.x == 4 || shape.x == 6 {
-            let x = Double(frame.x)*radius, y = Double(frame.y)*radius
+        if shape.x == 13 {
+            // Bound the spiral with 24 chords. A 0.03 pad encloses their
+            // curvature (max |p''| / (8 * 24²)); the other pads cover
+            // harmonic drift and the widest spread of the filaments.
+            let scale = SIMD2(Double(frame.x),Double(frame.y))
+            let start = Double(shape.w)+0.32*sin(phase)
+            let sweep = 2 * Double.pi*Double(shape.y), inner = Double(shape.z)
+            var low = SIMD2<Double>(repeating: .infinity), high = -low
+            for i in 0...24 {
+                let f = Double(i)/24, a = start+sweep*f, r = inner+(1-inner)*f
+                let p = rotate(SIMD2(cos(a),sin(a))*r*scale)
+                low = simd_min(low,p); high = simd_max(high,p)
+            }
+            let margin = abs(rotate(SIMD2(0,0.17)*scale)) + SIMD2(repeating: 0.14*max(scale.x,scale.y))
+            return (low+shift-margin,high+shift+margin)
+        }
+        if shape.x == 0 || shape.x == 4 || shape.x == 6 || shape.x == 10 || shape.x == 11 {
+            // Orthogonal projection cannot enlarge the torus enclosing
+            // sphere.
+            let envelope = shape.x == 11 ? radius*(0.68+Double(shape.z)) : radius
+            let x = Double(frame.x)*envelope, y = Double(frame.y)*envelope
             let extent = SIMD2(sqrt(x*x*c*c+y*y*s*s),sqrt(x*x*s*s+y*y*c*c))
             return (shift-extent,shift+extent)
         }
@@ -290,8 +364,13 @@ struct AtlasField {
             return (shift-extent,shift+extent)
         }
         var low = SIMD2<Double>(repeating: .infinity), high = -low
-        if shape.x == 7 {
-            let extent = SIMD2<Double>(repeating: 1)
+        if shape.x == 7 || shape.x >= 9 {
+            let extent: SIMD2<Double>
+            switch Int(shape.x) {
+            case 9: extent = SIMD2(1.12,0.68)/radius
+            case 12: extent = SIMD2(1,1.05)
+            default: extent = SIMD2(repeating: 1)
+            }
             for x in [-1.0,1.0] { for y in [-1.0,1.0] {
                 let p = rotate(SIMD2(x*extent.x*radius*Double(frame.x),y*extent.y*radius*Double(frame.y)))+shift
                 low = simd_min(low,p); high = simd_max(high,p)
@@ -338,8 +417,9 @@ struct AtlasField {
         let targetFrame = Self.frame(shape: target,aspect: Double(aspect))
         // The soft radial projection stays below 1.4. A constant reserve
         // prevents the entire main shape from breathing with the ornament.
-        let a = Self.bounds(shape: source,frame: sourceFrame,rotation: rotation,radius: 1.4)
-        let b = Self.bounds(shape: target,frame: targetFrame,rotation: rotation,radius: 1.4)
+        let curvePhase = angle(t*0.035+offset)
+        let a = Self.bounds(shape: source,frame: sourceFrame,rotation: rotation,radius: 1.4,phase: Double(curvePhase))
+        let b = Self.bounds(shape: target,frame: targetFrame,rotation: rotation,radius: 1.4,phase: Double(curvePhase))
         let low = a.low*(1-transition.blend)+b.low*transition.blend
         let high = a.high*(1-transition.blend)+b.high*transition.blend
         let extent = simd_max(abs(low),abs(high))
@@ -348,7 +428,7 @@ struct AtlasField {
             viewport: SIMD4(Float(width), Float(height), aspect, Float(delta)),
             style: SIMD4(Float(settings.lineWidth), Float(settings.trail), Float(settings.speed), Float(settings.density)),
             phase: SIMD4(angle(ornament),Float(0.8+0.7*sin(t*sqrt(7)/53+offset)+0.3*sin(t*sqrt(11)/173)),
-                         angle(t*sqrt(2)*0.091+0.17*sin(t*sqrt(7)/211)+offset),angle(t*0.035+offset)),
+                         angle(t*sqrt(2)*0.091+0.17*sin(t*sqrt(7)/211)+offset),curvePhase),
             sourceShape: source,targetShape: target,
             sourceFrame: sourceFrame,targetFrame: targetFrame,
             morph: SIMD4(Float(transition.blend),0,0,0),
@@ -362,7 +442,12 @@ struct AtlasField {
     }
 
     /// CPU reference for closure, correspondence and temporal-continuity checks.
-    static func point(_ phi: Double,layer: Int,uniforms u: AtlasUniforms) -> SIMD2<Double> {
+    static func point(_ full: Double,layer: Int,uniforms u: AtlasUniforms) -> SIMD2<Double> {
+        let blend = Double(u.morph.x)
+        let openness = (isOpen(u.sourceShape) ? 1-blend : 0)+(isOpen(u.targetShape) ? blend : 0)
+        // Every strand traverses a shorter arc as the seam opens. The
+        // open profiles use the original parameter and never wrap it.
+        let phi = Double.pi+(full-Double.pi)*(1-0.18*openness)
         let q = layer == 0 ? 0 : Double(layer-1)/Double(strandCount-2)
         let outside = Self.excursionWeight(q,orbit: u.orbit)
         let influence = layer == 0 ? 0 : Double(u.weave.y)+Double(u.weave.z)*pow(q,Double(u.detail.w))
@@ -391,7 +476,21 @@ struct AtlasField {
             let length = simd_length(z)
             let exterior = 1.07+0.20*q+0.90*length
             let radial = layer == 0 ? length : length*scale*(1-outside)+exterior*outside
-            let raw = outline(atan2(z.y,z.x),shape: shape)*Self.projectedRadius(radial)
+            let raw: SIMD2<Double>
+            if isOpen(shape) {
+                let s = full / .pi - 1, phase = Double(u.phase.w)
+                let drift = (z-SIMD2(cos(phi),sin(phi)))*0.12
+                let spread = layer == 0 ? 0 : (q-0.5)*(0.15+0.19*outside)
+                if shape.x == 9 {
+                    raw = SIMD2(s,Double(shape.z)*sin(.pi*s)+0.10*sin(2 * .pi*s-phase)+spread)+drift
+                } else {
+                    let f = (s+1)*0.5, r = Double(shape.z)+(1-Double(shape.z))*f
+                    let angle = full*Double(shape.y)+Double(shape.w)+0.32*sin(phase)
+                    raw = SIMD2(r*cos(angle),r*sin(angle)+spread)+drift
+                }
+            } else {
+                raw = outline(atan2(z.y,z.x),shape: shape,tiltPhase: Double(u.phase.w))*Self.projectedRadius(radial)
+            }
             return raw*SIMD2(Double(frame.x),Double(frame.y))+SIMD2(Double(frame.z),Double(frame.w))
         }
         let a = mapped(u.sourceShape,u.sourceFrame), b = mapped(u.targetShape,u.targetFrame)
@@ -419,6 +518,27 @@ struct AtlasUniforms {
     var orbit: SIMD4<Float>
     var layout: SIMD4<Float>
     var tint: SIMD4<Float>
+    var clock: SIMD4<Float> = .zero
+    var clockDigits: SIMD4<UInt32> = .zero
+}
+
+struct AtlasClockSettings: Codable, Equatable {
+    static let delayRange = 30.0...1800.0
+    static let durationRange = 8.0...90.0
+
+    var earliest = 300.0
+    var latest = 440.0
+    var duration = 15.0
+    var enabled = true
+
+    var validated: Self {
+        func bounded(_ value: Double,_ range: ClosedRange<Double>,_ fallback: Double) -> Double {
+            value.isFinite ? min(range.upperBound,max(range.lowerBound,value)) : fallback
+        }
+        let first = bounded(earliest,Self.delayRange,300)
+        return Self(earliest: first,latest: max(first,bounded(latest,Self.delayRange,440)),
+                    duration: bounded(duration,Self.durationRange,15),enabled: enabled)
+    }
 }
 
 struct AtlasSettings: Codable {
@@ -447,6 +567,7 @@ struct AtlasSettings: Codable {
     var lineWidth: Double = 0.6
     var glow: Double = 0.55
     var luminosity: Double = 1.35
+    var clock = AtlasClockSettings()
 
     static let defaults = UserDefaults(suiteName: "cz.coolajz.ScreenSaver.Atlas")!
 
@@ -459,6 +580,7 @@ struct AtlasSettings: Codable {
 
     var validated: Self {
         var result = self
+        result.clock = clock.validated
         result.speed = speed.isFinite ? min(Self.speedRange.upperBound, max(Self.speedRange.lowerBound, speed)) : Self.defaultSpeed
         result.shapeDuration = shapeDuration.isFinite ? min(Self.shapeDurationRange.upperBound, max(Self.shapeDurationRange.lowerBound, shapeDuration)) : Self.defaultShapeDuration
         result.trail = trail.isFinite ? min(3, max(0.15, trail)) : 0.55
@@ -482,6 +604,7 @@ extension AtlasSettings {
         trail = try values.decodeIfPresent(Double.self,forKey: .trail) ?? 0.55
         density = try values.decodeIfPresent(Int.self,forKey: .density) ?? 96
         lineWidth = try values.decodeIfPresent(Double.self,forKey: .lineWidth) ?? 0.6
+        clock = try values.decodeIfPresent(AtlasClockSettings.self,forKey: .clock) ?? AtlasClockSettings()
         let savedLight = try values.decodeIfPresent(Double.self,forKey: .luminosity)
         luminosity = savedLight ?? 1.35
         if let savedGlow = try values.decodeIfPresent(Double.self,forKey: .glow) {
